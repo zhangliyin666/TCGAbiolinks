@@ -6,7 +6,7 @@ library(SummarizedExperiment)
 data_type <- "Gene Expression Quantification"
 data_category <- "Transcriptome Profiling"
 workflow_type <- "HTSeq - Counts"
-cancer_type = "TCGA-BRCA"
+cancer_type = "TCGA-LUAD"
 #legacy默认为FALSE，从hg38下载数据
 query_TranscriptomeCounts <- GDCquery(project = cancer_type,
                                       data.category = data_category,
@@ -37,14 +37,14 @@ GDCdownload(queryDown,
 ###2.数据处理
 #GDCprepare()将前面GDCquery()的结果准备成R语言可处理的SE文件
 dataPrep1 <- GDCprepare(query = queryDown, save = TRUE, save.filename =
-                          "dataprep1_BRCA_case.rda")
+                          "1-dataprep1_LUAD_case.rda")
 
 ###3.数据预处理
 #去除异常值
 dataPrep2 <- TCGAanalyze_Preprocessing(object = dataPrep1,
                                        cor.cut = 0.6,
                                        datatype = "HTSeq - Counts")#592个
-write.csv(dataPrep2,file = "dataPrep2_BRCA.csv",quote = FALSE)
+write.csv(dataPrep2,file = "2-dataPrep2_LUAD.csv",quote = FALSE)
 ###4.筛选肿瘤纯度大于60%的barcodes
 #使用estimate, absolute, lump, ihc, cpe来衡量
 #cpe是派生的共识度量，是将所有方法的标准含量归一化后的均值纯度水平，以使它们具有相等的均值和标准差
@@ -52,13 +52,13 @@ purityDATA <- TCGAtumor_purity(colnames(dataPrep1), 0, 0, 0, 0, 0.6)#381个
 #purityDATA$pure_barcodes <- dataSmTP#purity533个
 #purityDATA$filtered <- dataSmNT#normal59个
 #filterde为被过滤的数据（正常组织的barcodes），pure_barcodes为我们要的肿瘤数据
-Purity.BRCA <- purityDATA$pure_barcodes#322个
-normal.BRCA <- purityDATA$filtered#59个
+Purity.LUAD <- purityDATA$pure_barcodes#322个
+normal.LUAD <- purityDATA$filtered#59个
 ###5.合并肿瘤和正常组织的表达矩阵
-puried_data <-dataPrep2[,c(Purity.BRCA,normal.BRCA)]#共381个
+puried_data <-dataPrep2[,c(Purity.LUAD,normal.LUAD)]#共381个
 ###6.进行基因注释
 rownames(puried_data)<-rowData(dataPrep1)$external_gene_name
-write.csv(puried_data,file = "puried.BRCA.csv",quote = FALSE)
+write.csv(puried_data,file = "3-puried.LUAD.csv",quote = FALSE)
 ###7.表达矩阵标准化和过滤，得到用于差异分析的矩阵
 BiocManager::install("EDASeq")
 library(EDASeq)
@@ -67,23 +67,23 @@ dataNorm <- TCGAanalyze_Normalization(tabDF = puried_data,
                                       geneInfo = geneInfo,
                                       method = "gcContent")
 #过滤低表达基因
-dataFilt_BRCA_final <- TCGAanalyze_Filtering(tabDF = dataNorm,
+dataFilt_LUAD_final <- TCGAanalyze_Filtering(tabDF = dataNorm,
                                              method = "quantile", 
                                              qnt.cut =  0.25)
-a <- c(rep("tumor",340),rep("normal",50))
+a <- c(rep("tumor",322),rep("normal",59))
 a <- t(as.data.frame(a))
-colnames(a)<-colnames(dataFilt_BRCA_final)
-dataFilt_BRCA_final <- rbind(dataFilt_BRCA_final,a)
-write.csv(dataFilt_BRCA_final,file = "TCGA_LIHC_final.csv",quote = FALSE)
+colnames(a)<-colnames(dataFilt_LUAD_final)
+dataFilt_LUAD_final <- rbind(dataFilt_LUAD_final,a)
+write.csv(dataFilt_LUAD_final,file = "4-TCGA_LUAD_final.csv",quote = FALSE)
 ###8.差异分析
 #dataFilt_LIHC_final <- read.csv("TCGA_LUAD_final.csv", header = T,check.names = FALSE）
 #rownames(dataFilt_LIHC_final) <- dataFilt_LIHC_final[,1]
 #dataFilt_LIHC_final <- dataFilt_LIHC_final[,-1]
 #肿瘤分组
-mat1 <- dataFilt_LIHC_final[,1:931]
+mat1 <- dataFilt_LUAD_final[,1:322]
 mat1 <- log(mat1+1)
 #正常分组
-mat2 <- dataFilt_LIHC_final[,932:1044]
+mat2 <- dataFilt_LUAD_final[,323:381]
 mat2 <- log(mat2+1)
 #差异分析
 BiocManager::install("edgeR")
@@ -96,7 +96,7 @@ Data_DEGs <- TCGAanalyze_DEA(mat1 = mat1,
                              batch.factors = c("TSS"),
                              voom = TRUE,
                              contrast.formula = "Mycontrast=Tumor-Normal")
-write.csv(Data_DEGs,file = "LUAD_DEGs.csv",quote = FALSE)
+write.csv(Data_DEGs,file = "5-LUAD_DEGs.csv",quote = FALSE)
 ###9.富集分析
 #筛选表达差异的基因，设置logfc
 Data_DEGs_high_expr <- Data_DEGs[Data_DEGs$logFC >=1,]
@@ -137,13 +137,13 @@ ego_cc<-enrichGO(gene       = Data_DEGs$symbol,
                  pvalueCutoff = 0.05)
 ego_bp<-enrichGO(gene       = gene.df$ENTREZID,
                  OrgDb      = org.Hs.eg.db,
-                 
+                 keyType = "ENTREZID",
                  ont        = "BP",
                  pAdjustMethod = "BH",
                  pvalueCutoff = 0.05)
 ego_mf<-enrichGO(gene       = gene.df$ENTREZID,
                  OrgDb      = org.Hs.eg.db,
-                 
+                 keyType = "ENTREZID",
                  ont        = "MF",
                  pAdjustMethod = "BH",
                  pvalueCutoff = 0.05)
@@ -208,7 +208,7 @@ threshold<-as.factor(
      Data_DEGs$P.Value<0.05 ))
 library(ggplot2)
 ggplot(Data_DEGs,aes(x= logFC,
-                    y= -1*log10(P.Value),colour=threshold))+xlab("log2 fold-change")+ylab("-log10 p-value")+geom_point() 
+                     y= -1*log10(P.Value),colour=threshold))+xlab("log2 fold-change")+ylab("-log10 p-value")+geom_point() 
 ###12.生存分析
 library(survminer)
 library(survival)
@@ -225,28 +225,28 @@ TCGAanalyze_survival(clin.LUAD,
                      color = c("Dark2"))
 ##单个基因表达对生存曲线的影响
 #提取肿瘤样本中A4GALT的表达
-#以A4GALT为例
-dataFilt_LUAD_final <- read.csv("TCGA_LUAD_final.csv",row.names = 1,check.names=FALSE)
+#以METTL14为例
+dataFilt_LUAD_final <- read.csv("4-TCGA_LUAD_final.csv",row.names = 1,check.names=FALSE)
 samplesTP <- TCGAquery_SampleTypes(colnames(dataFilt_LUAD_final), typesample = c("TP"))
 METTL14 <- dataFilt_LUAD_final[c("METTL14"),samplesTP]
 #修改样本名称
 #样本名像这样TCGA-91-6840-01A-11R-1949-07
 names(METTL14) <- sapply(strsplit(names(METTL14),'-'),function(x) paste0(x[1:3],collapse="-"))
-METTL3 <- t(METTL3)
+METTL14 <- t(METTL14)
 #合并基因和临床数据
-clin.LUAD$"METTL3" <- METTL3[match(clin.LUAD$submitter_id,rownames(METTL3)),]
+clin.LUAD$"METTL14" <- METTL14[match(clin.LUAD$submitter_id,rownames(METTL14)),]
 #选择生存分析需要的数据
-df<-subset(clin.LUAD,select =c(submitter_id,vital_status,days_to_death,days_to_last_follow_up,METTL3))
+df<-subset(clin.LUAD,select =c(submitter_id,vital_status,days_to_death,days_to_last_follow_up,METTL14))
 #去除基因表达缺失的值
-df <- df[!is.na(df$METTL3),]
+df <- df[!is.na(df$METTL14),]
 #根据基因表达情况分组
-df$METTL3 <- as.numeric(df$METTL3)
+df$METTL14 <- as.numeric(df$METTL14)
 df$exp <- ''
-df[df$METTL3 >= mean(df$METTL3),]$exp <- "H"
-df[df$METTL3 < mean(df$METTL3),]$exp <- "L"
+df[df$METTL14 >= mean(df$METTL14),]$exp <- "H"
+df[df$METTL14 < mean(df$METTL14),]$exp <- "L"
 #使用TCGAanalyze_survival函数分析
 TCGAanalyze_survival(df,
-                     legend = "METTL3",
+                     legend = "METTL14",
                      clusterCol="exp",
                      risk.table = FALSE,
                      conf.int = FALSE,
@@ -254,7 +254,7 @@ TCGAanalyze_survival(df,
                      color = c("Dark2"))
 ###13.差异基因的热图和火山图
 ##加载预处理文件
-TCGA_LUAD_data <- read.csv(file = "TCGA_LUAD_final.csv",
+TCGA_LUAD_data <- read.csv(file = "4-TCGA_LUAD_final.csv",
                            header = T,
                            row.names = 1,
                            check.names = FALSE )#保证列名不发生自动更正
@@ -276,35 +276,35 @@ NT <- TP_NT$NT2
 ##数据下载和预处理
 #由于之前已经保存了一些数据所以处理部分可以忽略
 #queryDown <- GDCquery(project = "TCGA-LUAD",
-                      #data.category = "Transcriptome Profiling",
-                      #data.type = "Gene Expression Quantification",
-                      #workflow.type = "HTSeq - Counts")
+#data.category = "Transcriptome Profiling",
+#data.type = "Gene Expression Quantification",
+#workflow.type = "HTSeq - Counts")
 #GDCdownload(queryDown,
-            #method = "api",
-            #directory = "GDCdata",
-            #files.per.chunk = 6)
+#method = "api",
+#directory = "GDCdata",
+#files.per.chunk = 6)
 #dataPrep1 <- GDCprepare(query = queryDown, save = F)
 #直接读入之前保存好的数据
-load("H:/tcgabiolinks/LUAD_case.rda")
-dataPrep2 <- TCGAanalyze_Preprocessing(object = dataPrep1,
-                                       cor.cut = 0.6,
-                                       datatype = "HTSeq - Counts")
-dataPrep1 <- data
-purityDATA <- TCGAtumor_purity(colnames(dataPrep1), 0, 0, 0, 0, 0.6)
-Purity.LUAD <- purityDATA$pure_barcodes#322
-normal.LUAD <- purityDATA$filtered#59
-puried_data <-dataPrep2[,c(Purity.LUAD,normal.LUAD)]
+load("I:/tcgabiolinks/TCGAbiolinks/1-dataprep1_LUAD_case.rda")
+#dataPrep2 <- TCGAanalyze_Preprocessing(object = dataPrep1,
+#                                       cor.cut = 0.6,
+#                                       datatype = "HTSeq - Counts")
+#dataPrep1 <- data
+#purityDATA <- TCGAtumor_purity(colnames(dataPrep1), 0, 0, 0, 0, 0.6)
+#Purity.LUAD <- purityDATA$pure_barcodes#322
+#normal.LUAD <- purityDATA$filtered#59
+#puried_data <-dataPrep2[,c(Purity.LUAD,normal.LUAD)]
 #写入结果
-rownames(puried_data)<-rowData(dataPrep1)$external_gene_name
+#rownames(puried_data)<-rowData(dataPrep1)$external_gene_name
 #进行文库大小和GC丰度标准化
-dataNorm <- TCGAanalyze_Normalization(tabDF = puried_data,
-                                      geneInfo = geneInfo,
-                                      method = "gcContent")
+#dataNorm <- TCGAanalyze_Normalization(tabDF = puried_data,
+#                                     geneInfo = geneInfo,
+#                                      method = "gcContent")
 #过滤低count基因
-dataFilt <- TCGAanalyze_Filtering(tabDF = dataNorm,
-                                             method = "quantile", 
-                                             qnt.cut =  0.25)
-#write.csv(dataFilt,file = "paired_TCGA_LUAD_final.csv",quote = FALSE)
+#dataFilt <- TCGAanalyze_Filtering(tabDF = dataNorm,
+ #                                 method = "quantile", 
+  #                                qnt.cut =  0.25)
+#write.csv(dataFilt,file = "6-paired_TCGA_LUAD_final.csv",quote = FALSE)
 ##差异表达分析
 #dataFilt_LUAD_final <- read.csv(file = "paired_TCGA_LUAD_final.csv",header = T,row.names = 1,check.names = FALSE)
 #肿瘤vs正常
@@ -333,17 +333,17 @@ dataTP <- dataFilt_LUAD_final[,samplesTP]
 dataTN <- dataFilt_LUAD_final[,samplesNT]
 #传入参数
 dataDEGsFiltLevel <- TCGAanalyze_LevelTab(FC_FDR_table_mRNA = dataDEGsFilt,
-                                          typeCond1 ="Normal",
-                                          typeCond2 = "Tumor",
-                                          TableCond1 = dataTN,
-                                          TableCond2 = dataTP)
+                                          typeCond1 ="Tumor",
+                                          typeCond2 = "Normal",
+                                          TableCond1 = dataTP,
+                                          TableCond2 = dataTN)
 head(dataDEGsFiltLevel, 2)
 ##主成分分析
 pca <-TCGAvisualize_PCA(dataFilt = dataFilt_LUAD_final, 
                         dataDEGsFiltLevel = dataDEGsFiltLevel,
                         ntopgenes = 100,
-                        group1 = samplesNT, 
-                        group2 = samplesTP)
+                        group1 = samplesTP, 
+                        group2 = samplesNT)
 ##差异基因热图
 #获取表达矩阵
 datDEGs <- dataFilt_LUAD_final[match(rownames(DEG_LUAD_edgeR),rownames(dataFilt_LUAD_final)),]
@@ -396,7 +396,7 @@ TCGAVisualize_volcano(DEG_LUAD_edgeR$logFC,
                       highlight = rownames(DEG_LUAD_edgeR)[which(abs(DEG_LUAD_edgeR$logFC) >= 8)],
                       highlight.color = "orange",
                       title = "volcano plot by edgeR")
-                     # title = "volcano plot by limma")
+# title = "volcano plot by limma")
 ###14.肿瘤浸润分析
 #接puried_data
 condition <- factor(c(rep("tumor",322),rep("normal",59)), levels = c("tumor","normal"))
