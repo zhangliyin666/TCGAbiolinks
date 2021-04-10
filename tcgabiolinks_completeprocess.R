@@ -1,4 +1,4 @@
-###1.数据下载
+###1.Download data from TCGA
 library(TCGAbiolinks)
 library(dplyr)
 library(DT)
@@ -7,66 +7,65 @@ data_type <- "Gene Expression Quantification"
 data_category <- "Transcriptome Profiling"
 workflow_type <- "HTSeq - Counts"
 cancer_type = "TCGA-LUAD"
-#legacy默认为FALSE，从hg38下载数据
+#legacy default is FALSE, downloading from hg38
 query_TranscriptomeCounts <- GDCquery(project = cancer_type,
                                       data.category = data_category,
                                       data.type = data_type,
                                       workflow.type = workflow_type)
-#getResults(query, rows, cols)根据指定行名或列名从query——transcriptome中获取结果,此处用来获得样本的barcode
-samplesDown <- getResults(query_TranscriptomeCounts,cols=c("cases"))#共594个
-#从samplesDown中筛选出TP（实体肿瘤）样本的barcodes
+#getresults:to get the sample barcodes from "query_TranscriptomeCounts"
+samplesDown <- getResults(query_TranscriptomeCounts,cols=c("cases"))#594 in total
+#to select the solid tumor samples in "samplesDown"
 #TP：Primary Solid Tumor
 #NT：Solid Tissue Normal
 dataSmTP <- TCGAquery_SampleTypes(barcode = samplesDown,
-                                  typesample = "TP")#533个
+                                  typesample = "TP")#533
 dataSmNT <- TCGAquery_SampleTypes(barcode = samplesDown,
-                                  typesample = "NT")#59个
-#按照样本分组重新筛选符合条件的barcodes
+                                  typesample = "NT")#59
+#to filter the qualified barcodes according to groups
 queryDown <- GDCquery(project = cancer_type, 
                       data.category = data_category,
                       data.type = data_type, 
                       workflow.type = workflow_type, 
                       barcode = c(dataSmTP, dataSmNT))
-#barcode：根据输入的数据进行过滤
+#to download the data that comply with the conditions
 GDCdownload(queryDown,
             method = "api",
             directory = "GDCdata",
-            files.per.chunk = 6)#共592个文件
-#method：api或者client，api速度快但可能出现下载中断
-#files.per.chunk：使用api方法时一次只下载n个文件，将一个大文件拆分为n个小文件进行下载，减少下载出错
-###2.数据处理
-#GDCprepare()将前面GDCquery()的结果准备成R语言可处理的SE文件
-dataPrep1 <- GDCprepare(query = queryDown, save = TRUE, save.filename =
+            files.per.chunk = 6)#592 in total
+#method：api or client，api is faster but easy to be interrupted
+#files.per.chunk：For example, when use api, if files.per.chunk = 6, it would download 6 files at a time to reduce error
+###2.Data optitions
+#to transfer the result of GDCquery() into R-accessible pattern
+dataPrep1 <- GDCprepare(query = queryDown,save = TRUE, save.filename =
                           "1-dataprep1_LUAD_case.rda")
 
-###3.数据预处理
-#去除异常值
+###3.Data pre-processing
+#to remove the abnormal data
 dataPrep2 <- TCGAanalyze_Preprocessing(object = dataPrep1,
                                        cor.cut = 0.6,
-                                       datatype = "HTSeq - Counts")#592个
+                                       datatype = "HTSeq - Counts")#592
 write.csv(dataPrep2,file = "2-dataPrep2_LUAD.csv",quote = FALSE)
-###4.筛选肿瘤纯度大于60%的barcodes
-#使用estimate, absolute, lump, ihc, cpe来衡量
-#cpe是派生的共识度量，是将所有方法的标准含量归一化后的均值纯度水平，以使它们具有相等的均值和标准差
-purityDATA <- TCGAtumor_purity(colnames(dataPrep1), 0, 0, 0, 0, 0.6)#381个
-#purityDATA$pure_barcodes <- dataSmTP#purity533个
-#purityDATA$filtered <- dataSmNT#normal59个
-#filterde为被过滤的数据（正常组织的barcodes），pure_barcodes为我们要的肿瘤数据
-Purity.LUAD <- purityDATA$pure_barcodes#322个
-normal.LUAD <- purityDATA$filtered#59个
-###5.合并肿瘤和正常组织的表达矩阵
+###4.To select the barcodes that tumor purity > 60%
+#There are estimate, absolute, lump, ihc, cpe to decide
+#cpe: The mean value of purity after normalizing the contents in all methods to make them have the same mean value and standard diviation
+purityDATA <- TCGAtumor_purity(colnames(dataPrep1), 0, 0, 0, 0, 0.6)#381 in total
+#filtered: the barcodes of normal tissue (control)
+#pure_barcodes: the barcodes of tumor tissue
+Purity.LUAD <- purityDATA$pure_barcodes#322
+normal.LUAD <- purityDATA$filtered#59
+###5.Merge the expression set of tumor and normal
 puried_data <-dataPrep2[,c(Purity.LUAD,normal.LUAD)]#共381个
-###6.进行基因注释
+###6.Gene annotation
 rownames(puried_data)<-rowData(dataPrep1)$external_gene_name
 write.csv(puried_data,file = "3-puried.LUAD.csv",quote = FALSE)
-###7.表达矩阵标准化和过滤，得到用于差异分析的矩阵
+###7.Expression set for differential analysis after normalization and filteration
 BiocManager::install("EDASeq")
 library(EDASeq)
-#标准化
+#normalization
 dataNorm <- TCGAanalyze_Normalization(tabDF = puried_data,
                                       geneInfo = geneInfo,
                                       method = "gcContent")
-#过滤低表达基因
+#remove low count genes
 dataFilt_LUAD_final <- TCGAanalyze_Filtering(tabDF = dataNorm,
                                              method = "quantile", 
                                              qnt.cut =  0.25)
@@ -75,17 +74,14 @@ a <- t(as.data.frame(a))
 colnames(a)<-colnames(dataFilt_LUAD_final)
 dataFilt_LUAD_final <- rbind(dataFilt_LUAD_final,a)
 write.csv(dataFilt_LUAD_final,file = "4-TCGA_LUAD_final.csv",quote = FALSE)
-###8.差异分析
-#dataFilt_LIHC_final <- read.csv("TCGA_LUAD_final.csv", header = T,check.names = FALSE）
-#rownames(dataFilt_LIHC_final) <- dataFilt_LIHC_final[,1]
-#dataFilt_LIHC_final <- dataFilt_LIHC_final[,-1]
-#肿瘤分组
+###8.Differential analysis
+#tumor group
 mat1 <- dataFilt_LUAD_final[,1:322]
 mat1 <- log(mat1+1)
-#正常分组
+#normal group
 mat2 <- dataFilt_LUAD_final[,323:381]
 mat2 <- log(mat2+1)
-#差异分析
+#analysis 
 BiocManager::install("edgeR")
 library(edgeR)
 Data_DEGs <- TCGAanalyze_DEA(mat1 = mat1,
@@ -97,29 +93,29 @@ Data_DEGs <- TCGAanalyze_DEA(mat1 = mat1,
                              voom = TRUE,
                              contrast.formula = "Mycontrast=Tumor-Normal")
 write.csv(Data_DEGs,file = "5-LUAD_DEGs.csv",quote = FALSE)
-###9.富集分析
-#筛选表达差异的基因，设置logfc
+###9.Enrichment analysis
+#to set the threshold of logFC 
 Data_DEGs_high_expr <- Data_DEGs[Data_DEGs$logFC >=1,]
 Genelist <- rownames(Data_DEGs_high_expr)
 ansEA <- TCGAanalyze_EAcomplete(TFname="DEA genes Tumor Vs Normal",
                                 Genelist)
-#可视化
+#visualization
 TCGAvisualize_EAbarplot(tf  = rownames(ansEA$ResBP),
                         GOBPTab = ansEA$ResBP,
                         GOCCTab = ansEA$ResCC,
                         GOMFTab = ansEA$ResMF,
                         PathTab = ansEA$ResPat,
                         nRGTab = Genelist,
-                        nBar = 20, #显示条形图的数量
+                        nBar = 20, #the number of barplot
                         filename = "TCGAvisualize_EAbarplot_Output.pdf")
-###10.聚类分析
+###10.Clustering analysis
 BiocManager::install("ConsensusClusterPlus")
 library(ConsensusClusterPlus)
 res.hc <- TCGAanalyze_Clustering(Data_DEGs, 
                                  method = "hclust", 
                                  methodHC = "ward.D2")
 plot(res.hc)
-###11.clusterprofiler分析
+###11.Enrichment using ClusterProfiler
 library(clusterProfiler)
 library(org.Hs.eg.db)
 Data_DEGs$symbol <- row.names(Data_DEGs)
@@ -182,13 +178,14 @@ gene.df<-bitr(gene, fromType = "SYMBOL",
 head(Data_DEGs)
 foldchanges = Data_DEGs$logFC
 names(foldchanges)= gene.df$ENTREZID
-#当时直接运行了结果报错，
+#There was an error when running as follow
 #Error in names(foldchanges) = gene.df$ENTREZID : 
 #'names'属性的长度[14370]必需和矢量的长度[12963]一样
-#duplicated(gene.df$SYMBOL)然后查重一下
-#果然有重复的
+#duplicated(gene.df$SYMBOL) to find the duplicated value
+#And I found some duplicated rows
+#To solve:
 #gene.df <- gene.df %>% distinct(SYMBOL,.keep_all = TRUE)
-#用于data.frame去重
+# Then removed
 head(foldchanges)
 keggres = gage(foldchanges, gsets = kegg.sets.hs, same.dir = TRUE)
 lapply(keggres, head)
@@ -209,12 +206,12 @@ threshold<-as.factor(
 library(ggplot2)
 ggplot(Data_DEGs,aes(x= logFC,
                      y= -1*log10(P.Value),colour=threshold))+xlab("log2 fold-change")+ylab("-log10 p-value")+geom_point() 
-###12.生存分析
+###12.Survival analysis
 library(survminer)
 library(survival)
-#下载临床数据
+#to download clinic information
 clin.LUAD <- GDCquery_clinic("TCGA-LUAD", "clinical")
-#性别对生存曲线的影响
+#to check the influence of "gender"
 TCGAanalyze_survival(clin.LUAD,
                      clusterCol="gender",
                      risk.table = FALSE,
@@ -223,28 +220,27 @@ TCGAanalyze_survival(clin.LUAD,
                      conf.int = FALSE,
                      pvalue = TRUE,
                      color = c("Dark2"))
-##单个基因表达对生存曲线的影响
-#提取肿瘤样本中A4GALT的表达
-#以METTL14为例
+##to investigate the influence of single gene
+#for example,METTL14
 dataFilt_LUAD_final <- read.csv("4-TCGA_LUAD_final.csv",row.names = 1,check.names=FALSE)
 samplesTP <- TCGAquery_SampleTypes(colnames(dataFilt_LUAD_final), typesample = c("TP"))
 METTL14 <- dataFilt_LUAD_final[c("METTL14"),samplesTP]
-#修改样本名称
-#样本名像这样TCGA-91-6840-01A-11R-1949-07
+#to modify sample name
+#to transfer like this: TCGA-91-6840-01A-11R-1949-07
 names(METTL14) <- sapply(strsplit(names(METTL14),'-'),function(x) paste0(x[1:3],collapse="-"))
 METTL14 <- t(METTL14)
-#合并基因和临床数据
+#to merge the gene and clinic data
 clin.LUAD$"METTL14" <- METTL14[match(clin.LUAD$submitter_id,rownames(METTL14)),]
-#选择生存分析需要的数据
+#to select the needed information for survival analyze
 df<-subset(clin.LUAD,select =c(submitter_id,vital_status,days_to_death,days_to_last_follow_up,METTL14))
-#去除基因表达缺失的值
+#to remove NA
 df <- df[!is.na(df$METTL14),]
-#根据基因表达情况分组
+#to classify into high expression or low expression
 df$METTL14 <- as.numeric(df$METTL14)
 df$exp <- ''
 df[df$METTL14 >= mean(df$METTL14),]$exp <- "H"
 df[df$METTL14 < mean(df$METTL14),]$exp <- "L"
-#使用TCGAanalyze_survival函数分析
+#analyse by TCGAanalyze_survival function
 TCGAanalyze_survival(df,
                      legend = "METTL14",
                      clusterCol="exp",
@@ -252,29 +248,29 @@ TCGAanalyze_survival(df,
                      conf.int = FALSE,
                      pvalue = TRUE,
                      color = c("Dark2"))
-###13.差异基因的热图和火山图
-##加载预处理文件
+###13.Differential gene - volcano and heatmap 
+##to load the pre-processing data
 TCGA_LUAD_data <- read.csv(file = "4-TCGA_LUAD_final.csv",
                            header = T,
                            row.names = 1,
-                           check.names = FALSE )#保证列名不发生自动更正
-#获取正常和肿瘤的barcodes
+                           check.names = FALSE )#to assure the column names not to be corrected automatically
+#to get the barcodes
 samplesNT <- TCGAquery_SampleTypes(colnames(TCGA_LUAD_data), typesample = c("NT"))
 samplesTP <- TCGAquery_SampleTypes(colnames(TCGA_LUAD_data), typesample = c("TP"))
-#配对正常和肿瘤的barcodes
+#pair the tumor and normal barcodes
 paired <- intersect(substr(samplesNT, 1, 12),substr(samplesTP, 1, 12))
 length(paired)
-#用前12位数据作桥梁，建立肿瘤和正常样本的数据框
+#to merge two groups using the 1st~12th data
 NT <- data.frame(NT1=substr(samplesNT,1,12),NT2=samplesNT)
 TP <- data.frame(TP1 =substr(samplesTP,1,12),TP2=samplesTP)
 TP_NT <- merge(TP,NT,by.x = "TP1",by.y = "NT1")
 head(TP_NT,3)
-#获取配对正常组织的barcodes
+#to get paired normal barcodes
 TP <- TP_NT$TP2
-#获取配对肿瘤组织的barcodes
+#to get paired tumor barcodes
 NT <- TP_NT$NT2
-##数据下载和预处理
-#由于之前已经保存了一些数据所以处理部分可以忽略
+##downloading and pre-processing
+#Some data has been saved so just load it into workspace.
 #queryDown <- GDCquery(project = "TCGA-LUAD",
 #data.category = "Transcriptome Profiling",
 #data.type = "Gene Expression Quantification",
@@ -284,7 +280,7 @@ NT <- TP_NT$NT2
 #directory = "GDCdata",
 #files.per.chunk = 6)
 #dataPrep1 <- GDCprepare(query = queryDown, save = F)
-#直接读入之前保存好的数据
+#load the data
 load("I:/tcgabiolinks/TCGAbiolinks/1-dataprep1_LUAD_case.rda")
 #dataPrep2 <- TCGAanalyze_Preprocessing(object = dataPrep1,
 #                                       cor.cut = 0.6,
@@ -294,9 +290,9 @@ load("I:/tcgabiolinks/TCGAbiolinks/1-dataprep1_LUAD_case.rda")
 #Purity.LUAD <- purityDATA$pure_barcodes#322
 #normal.LUAD <- purityDATA$filtered#59
 #puried_data <-dataPrep2[,c(Purity.LUAD,normal.LUAD)]
-#写入结果
+#write the result
 #rownames(puried_data)<-rowData(dataPrep1)$external_gene_name
-#进行文库大小和GC丰度标准化
+#to normalize library size and GC abundance
 #dataNorm <- TCGAanalyze_Normalization(tabDF = puried_data,
 #                                     geneInfo = geneInfo,
 #                                      method = "gcContent")
@@ -304,12 +300,12 @@ load("I:/tcgabiolinks/TCGAbiolinks/1-dataprep1_LUAD_case.rda")
 #dataFilt <- TCGAanalyze_Filtering(tabDF = dataNorm,
  #                                 method = "quantile", 
   #                                qnt.cut =  0.25)
-#write.csv(dataFilt,file = "6-paired_TCGA_LUAD_final.csv",quote = FALSE)
-##差异表达分析
-#dataFilt_LUAD_final <- read.csv(file = "paired_TCGA_LUAD_final.csv",header = T,row.names = 1,check.names = FALSE)
-#肿瘤vs正常
-mat1 <- dataFilt_LUAD_final[,1:322]#肿瘤322个
-mat2 <- dataFilt_LUAD_final[,323:381]#正常59个
+#write.csv(dataFilt,file = "paired_TCGA_LUAD_final.csv",quote = FALSE)
+##differential analysis
+#dataFilt_LUAD_final <- read.csv(file = "4-TCGA_LUAD_final.csv",header = T,row.names = 1,check.names = FALSE)
+#tumor vs normal
+mat1 <- dataFilt_LUAD_final[,1:322]#322
+mat2 <- dataFilt_LUAD_final[,323:381]#59
 DEG_LUAD_edgeR <- TCGAanalyze_DEA(mat1 = mat1,
                                   mat2 = mat2,
                                   Cond1type = "Tumor",
@@ -321,68 +317,68 @@ DEG_LUAD_edgeR <- TCGAanalyze_DEA(mat1 = mat1,
                                   fdr.cut = 0.01,
                                   logFC.cut = 1,
                                   method = "glmLRT")
-#write.csv(DEG.LUAD.edgeR,file = "paired_DEG_by_edgeR.csv")
-##增加不同分组条件下的gene平均表达量
-#获取各自的barcodes
+write.csv(DEG_LUAD_edgeR,file = "5-paired_DEG_by_edgeR.csv")
+##to increase average gene expression in different grouping conditions  
+#to get the barcodes respectively
 samplesNT <- TCGAquery_SampleTypes(colnames(dataFilt_LUAD_final), typesample = c("NT"))
 samplesTP <- TCGAquery_SampleTypes(colnames(dataFilt_LUAD_final), typesample = c("TP"))
 dataDEGsFilt <- DEG_LUAD_edgeR[abs(DEG_LUAD_edgeR$logFC) >= 1,]
 str(dataDEGsFilt)
-#获取各自的表达矩阵
+#to get the expression set respectively
 dataTP <- dataFilt_LUAD_final[,samplesTP]
 dataTN <- dataFilt_LUAD_final[,samplesNT]
-#传入参数
+#to import the parameter
 dataDEGsFiltLevel <- TCGAanalyze_LevelTab(FC_FDR_table_mRNA = dataDEGsFilt,
                                           typeCond1 ="Tumor",
                                           typeCond2 = "Normal",
                                           TableCond1 = dataTP,
                                           TableCond2 = dataTN)
 head(dataDEGsFiltLevel, 2)
-##主成分分析
+##PCA analysis
 pca <-TCGAvisualize_PCA(dataFilt = dataFilt_LUAD_final, 
                         dataDEGsFiltLevel = dataDEGsFiltLevel,
                         ntopgenes = 100,
                         group1 = samplesTP, 
                         group2 = samplesNT)
-##差异基因热图
-#获取表达矩阵
+##Heatmap of deg
+#to get the expression set
 datDEGs <- dataFilt_LUAD_final[match(rownames(DEG_LUAD_edgeR),rownames(dataFilt_LUAD_final)),]
-#获取临床信息
+#to obtain clinic information
 query <- GDCquery(project = "TCGA-LUAD",
                   data.category = "Clinical",
                   file.type = "xml",
                   barcode = substr(colnames(datDEGs),1,12))
 GDCdownload(query)  
 clinical <- GDCprepare_clinic(query,"patient")
-#根据表达矩阵样本的barcodes匹配临床信息
+#to match the expression set and clinic information
 datDEGs_test_barcodes <- as.data.frame(substr(colnames(datDEGs),1,12),ncol=1)
 colnames(datDEGs_test_barcodes) <-"LUAD_patient_barcode"
 m <- clinical[match(datDEGs_test_barcodes[,1], clinical[ , 1]),]
 str(m)
-#查看重复信息
+#check the duplicated data
 table(duplicated(m))
-#原始数据作图
+#heatmap of raw data
 pheatmap::pheatmap(datDEGs,scale = "row",show_rownames = F,show_colnames = F)
-#增加metadata信息
+#add metadata
 col.mdat <- data.frame(Sex=m$gender,
                        status=m$vital_status,
                        group=c(rep("tumor",322),rep("normal",59)))
-#保证列注释信息的行名与样本名（对应列）一致
+#annotations(row) should match samples(column)
 rownames(col.mdat) <- colnames(datDEGs) 
-#设置图例范围
+#to set the legend limit
 bk <- c(seq(-1,6,by=0.01))
-#作图
+#plot by pheatmap
 pheatmap::pheatmap(datDEGs,scale = "row",show_rownames = F,show_colnames = F,
                    annotation_col = col.mdat,
                    border_color=NA,
                    main = "Heatmap by pheatmap(edgeR)",
                    filename = "Heatmap_by_pheatmap.pdf",
                    color =c(colorRampPalette(colors = c("blue","white"))(length(bk)/2),
-                            colorRampPalette(colors = c("white","red"))(length(bk)/2)),#设置图例的颜色,
+                            colorRampPalette(colors = c("white","red"))(length(bk)/2)),#to set the legends color
                    legend_breaks=seq(-1,6,2),
                    breaks=bk )
-##差异分析火山图
-#突出显示logfc>=8的基因名
+##volcano
+#highlight the genes that logfc>=8
 DEG.LUAD.filt<-DEG_LUAD_edgeR[which(abs(DEG_LUAD_edgeR$logFC) >= 8), ]
 str(DEG_LUAD_edgeR)
 TCGAVisualize_volcano(DEG_LUAD_edgeR$logFC, 
@@ -397,8 +393,8 @@ TCGAVisualize_volcano(DEG_LUAD_edgeR$logFC,
                       highlight.color = "orange",
                       title = "volcano plot by edgeR")
 # title = "volcano plot by limma")
-###14.肿瘤浸润分析
-#接puried_data
+###14.Infiltration analysis by CIBERSORT
+#after the puried_data
 condition <- factor(c(rep("tumor",322),rep("normal",59)), levels = c("tumor","normal"))
 condition
 table(condition)
@@ -414,6 +410,7 @@ dds <- DESeq(dds)
 dds
 vsdata <- vst(dds, blind=FALSE)
 exprSet=assay(vsdata)
+write.table(exprSet,file = "exprset.txt")
 
 
 library(preprocessCore)
@@ -423,31 +420,63 @@ exp.file <- "exprset.txt"
 TME.results = CIBERSORT(LM22.file, exp.file, perm = 1000, QN = TRUE)
 write.csv(TME.results,file = "TME_cibersort.csv")
 
+###15.Infiltration analysis by MCPcounter
+install_github("ebecht/MCPcounter",ref="master", subdir="Source",force = T)
+exprset <- read.csv(file = "4-TCGA_LUAD_final.csv",header = T,row.names = 1)
+exprset <- log2(exprset+1)
 
-condition <- factor(c(rep("tumor",931),rep("control",113)), levels = c("tumor","control"))
+MCPcounter.estimate <- MCPcounter.estimate(
+  exprset,
+  featuresType=c('affy133P2_probesets','HUGO_symbols','ENTREZ_ID')[2],           
+  probesets=read.table(curl('http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/probesets.txt'),sep='\t',stringsAsFactors=FALSE,colClasses='character'),
+  genes=read.table(curl('http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/genes.txt'),sep='\t',stringsAsFactors=FALSE,header=TRUE,colClasses='character',check.names=FALSE)
+)
+
+group <- factor(c(rep("tumor",322),rep("normal",59)))
+group <- t(as.data.frame(group))
+colnames(group) <- colnames(MCPcounter.estimate)
+MCPcounter.estimate <- rbind(MCPcounter.estimate,group)
+write.csv(MCPcounter.estimate,file = "mcp_result_BRC.csv")
+
+data<-data.frame(Sample<-c(rep('control1',3),rep('control2',3),rep('control3',3),rep('treat1',3),rep('treat2',3),rep('treat3',3),rep('treat4',3)), contion<-rep(c('Cell','Tissue','Organ'),7), value<-c(503,264,148,299,268,98,363,289,208,108,424,353,1,495,168,152,367,146,48,596,143))
+
+colnames(data)=c('sample',"contion","value")
+
+ggplot(mcp,
+       mapping = aes(Sample,value,fill=contion))
++geom_bar(stat='identity',position='fill') 
++labs(x = 'Sample',y = 'frequnency') 
++theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'))
++theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+#to show interested genes high or low expression in one plot 
+condition <- factor(c(rep("tumor",322),rep("control",59)), levels = c("tumor","control"))
 condition
 table(condition)
 
-exprset <- read.csv("TCGA_BRCA_final.csv",header = T,row.names = 1)
+exprset <- read.csv("4-TCGA_LUAD_final.csv",header = T,row.names = 1)
 exprset <- log2(exprset+1)
 
 m6agenes <- exprset[c("METTL3","METTL14","WTAP","RBM15","ZC3H13",
                       "YTHDF1","YTHDF2","YTHDF3","YTHDC1","YTHDC2","IGF2BP1","IGF2BP2","HNRNPC",
                       "FTO","ALKBH5"),]
 m6agenes <- as.data.frame(t(m6agenes))
-m6agenes$condition <- c(rep("tumor",931),rep("control",113))
-
-a <- as.data.frame(m6agenes$ALKBH5)
-b <- as.data.frame(m6agenes$condition)
-c <- as.data.frame(rep("ALKBH5",1044))
-d <- cbind(a,c,b)
-colnames(d) <- c("Expression","gene","group")
+m6agenes$condition <- c(rep("tumor",322),rep("control",59))
+#there is a loop
+#a <- as.data.frame(m6agenes$ALKBH5)
+#b <- as.data.frame(m6agenes$condition)
+#c <- as.data.frame(rep("ALKBH5",381))
+#d <- cbind(a,c,b)
+#colnames(d) <- c("Expression","gene","group")
 #dat <- d
-dat <- rbind(dat,d)
-dat$gene = factor(dat$gene, levels=c("METTL3","METTL14","WTAP","RBM15","ZC3H13",
-                                     "YTHDF1","YTHDF2","YTHDF3","YTHDC1","YTHDC2","IGF2BP1","IGF2BP2","HNRNPC",
-                                     "FTO","ALKBH5"))
-write.csv(dat,file = "dat_brca.csv")
+#dat <- rbind(dat,d)
+#dat$gene = factor(dat$gene, levels=c("METTL3","METTL14","WTAP","RBM15","ZC3H13",
+                                     #"YTHDF1","YTHDF2","YTHDF3","YTHDC1","YTHDC2","IGF2BP1","IGF2BP2","HNRNPC",
+                                     #"FTO","ALKBH5"))
+#write.csv(dat,file = "dat_luad.csv")
+#I've done previous steps,so just load the data
+dat <- read.csv("7-dat_luad.csv",row.names = 1)
 compare_means( Expression ~ group, data = dat, group.by = "gene")
 p <- ggboxplot(dat, x = "group", y = "Expression",
                color = "group", palette = "jco",
@@ -455,36 +484,37 @@ p <- ggboxplot(dat, x = "group", y = "Expression",
                facet.by = "gene",
                short.panel.labs = FALSE)
 p + stat_compare_means(label = "p.format")
-pdf("LIHC.pdf",width=20,height=20)
+pdf("LUAD.pdf",width=20,height=20)
 dev.off
-#4.当3步无效时使用while (!is.null(dev.list()))  dev.off()
+#when "dev.off()" doesn't work use "while (!is.null(dev.list()))  dev.off()"
 
+#heatmap by complexheatmap
 condition <- factor(c(rep("tumor",322),rep("control",59)), levels = c("control","tumor"),ordered = F)
 group <- data.frame(group=condition)
 rownames(group)=colnames(m6agenes)
 samples <- condition
 m6agenes <- as.matrix(m6agenes)
+#ATTENTION: before run, class the type of input data set, it must be "num"
 heat <- Heatmap(m6agenes, 
-                col = colorRampPalette(c('navy', 'white', 'firebrick3'))(100), #定义热图由低值到高值的渐变颜色
-                heatmap_legend_param = list(grid_height = unit(10,'mm')),  #图例高度设置
-                show_row_names = TRUE,  #不展示基因名称
+                col = colorRampPalette(c('navy', 'white', 'firebrick3'))(100), #set the high and low colors
+                heatmap_legend_param = list(grid_height = unit(10,'mm')),  #set the height of legends
+                show_row_names = TRUE,  #show the gene name
                 top_annotation = HeatmapAnnotation(Group = samples, 
                                                    simple_anno_size = unit(2, 'mm'), 
-                                                   col = list(Group = c('control' = '#00DAE0', 'tumor' = '#FF9289')),  #定义样本分组的颜色
+                                                   col = list(Group = c('control' = '#00DAE0', 'tumor' = '#FF9289')),  #set the sample groups color
                                                    show_annotation_name = FALSE), 
                 column_names_gp = gpar(fontsize = 10), 
                 row_names_gp = gpar(fontsize = 10),
                 cluster_rows = F,
                 cluster_columns = F)
 print(heat)
-pdf("cd10_m6aheatmap.pdf",width=20,height=15)
+pdf("LUAD_m6aheatmap.pdf",width=20,height=15)
 dev.off
-#4.当3步无效时使用while (!is.null(dev.list()))  dev.off()
+##when "dev.off()" doesn't work use "while (!is.null(dev.list()))  dev.off()"
 
 
-#相关性分析
+#16.relationship analysis
 fr <- m6agenes
-fr <- log(fr+1)
 fr <- as.data.frame(t(fr))
 ggscatterstats(data = fr, 
                y =METTL14, 
@@ -502,7 +532,7 @@ ggcorrplot(
   corr = corr.result,
   type = 'full',
   p.mat = corr.p,#P-Value
-  sig.level = 0.05 #P-Value大于0.05的在图中标记出来
+  sig.level = 0.05 #show the p-value >0.05
 )
 
 ggcorrplot(corr.result,

@@ -9,7 +9,7 @@ MCPcounter.estimate <- MCPcounter.estimate(
   genes=read.table(curl('http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/genes.txt'),sep='\t',stringsAsFactors=FALSE,header=TRUE,colClasses='character',check.names=FALSE)
 )
 
-group <- factor(c(rep("tumor",931),rep("normal",113)))
+group <- factor(c(rep("tumor",322),rep("normal",59)))
 group <- t(as.data.frame(group))
 colnames(group) <- colnames(MCPcounter.estimate)
 MCPcounter.estimate <- rbind(MCPcounter.estimate,group)
